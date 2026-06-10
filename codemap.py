@@ -231,10 +231,34 @@ def install_hook(slug, uninstall=False):
     return f"  [{slug}] hook {'aggiornato' if ours else 'installato'} → {target}"
 
 
+DRIFT_THRESHOLD = 30  # commit dopo l'ultimo touch di CLAUDE.md -> audit consigliato
+
+def governance_drift(path, fname="CLAUDE.md"):
+    """(data ultimo touch, n commit dopo) del file governance nel repo.
+    (None, None) se file assente o mai committato."""
+    import subprocess
+    if not os.path.isfile(os.path.join(path, fname)): return None, None
+    try:
+        last = subprocess.run(
+            ["git", "-C", path, "log", "-1", "--format=%H|%ad",
+             "--date=format:%m-%d", "--", fname],
+            capture_output=True, text=True, timeout=15).stdout.strip()
+        if not last: return None, None
+        sha, date = last.split("|", 1)
+        n = int(subprocess.run(
+            ["git", "-C", path, "rev-list", "--count", f"{sha}..HEAD"],
+            capture_output=True, text=True, timeout=15).stdout.strip() or 0)
+        return date, n
+    except Exception:
+        return None, None
+
+
 def check_fresh():
     """Monitor auto-regen: per ogni repo, ultimo commit vs note più recenti.
     Se un commit è più nuovo delle note (+60s margine) l'hook NON ha girato.
-    Exit code 1 se almeno un repo è STALE (utile per scheduling)."""
+    Exit code 1 se almeno un repo è STALE (utile per scheduling).
+    In coda: governance drift (CLAUDE.md) — SOLO warning, non cambia l'exit code
+    (drift cronico non deve mascherare i guasti veri dell'auto-regen)."""
     import subprocess, datetime
     stale = []
     print(f"  {'repo':<10} {'ultimo commit':<17} {'note codemap':<17} verdict")
@@ -259,10 +283,25 @@ def check_fresh():
         ok = note_ts + 60 >= commit_ts
         if not ok: stale.append(slug)
         print(f"  {slug:<10} {fmt(commit_ts):<17} {fmt(note_ts):<17} {'FRESH ✓' if ok else 'STALE ✗ (hook non ha girato)'}")
+    # --- governance drift (livello 1: solo detection, mai exit!=0) ---
+    drifted = []
+    print(f"\n  {'repo':<10} {'CLAUDE.md':<12} {'commit dopo':<12} governance")
+    for slug in REPOS:
+        date, n = governance_drift(repo_path_of(slug))
+        if date is None:
+            print(f"  {slug:<10} {'—':<12} {'—':<12} (assente o mai committato)"); continue
+        warn = n > DRIFT_THRESHOLD
+        if warn: drifted.append((slug, n))
+        print(f"  {slug:<10} {date:<12} {n:<12} {'⚠️ AUDIT consigliato (>' + str(DRIFT_THRESHOLD) + ')' if warn else 'ok'}")
+    if drifted:
+        tops = ", ".join(f"{s} ({n})" for s, n in sorted(drifted, key=lambda x: -x[1]))
+        print(f"\n  ⚠️ governance drift: {tops}")
+        print("     → audit con /claude-md-improver sul repo (proposta automatica = livello 2, non attivo)")
+
     if stale:
         print(f"\n  ⚠️ STALE: {', '.join(stale)} — verifica .git/hooks/post-commit in quei repo")
         sys.exit(1)
-    print("\n  monitor ok — tutte le code-map sono fresche")
+    print("\n  monitor ok — code-map tutte fresche" + (", governance drift segnalato sopra" if drifted else " e governance in linea"))
 
 
 # --- CLI ---------------------------------------------------------------------

@@ -2,9 +2,11 @@
 """Test unitari codemap (stdlib unittest, zero dipendenze).
 Coprono: mod_key_for, regex TS export, guardia js, config REPOS, hook script.
 """
+import os
 import unittest
 from codemap import (mod_key_for, TS_EXPORT, skip_js, REPOS, load_config,
-                     make_hook_script, HOOK_MARKER)
+                     make_hook_script, HOOK_MARKER, governance_drift,
+                     DRIFT_THRESHOLD)
 
 
 class TestModKey(unittest.TestCase):
@@ -70,6 +72,23 @@ class TestReposConfig(unittest.TestCase):
 
     # I test legati alla config specifica di QUESTA macchina (slug reali,
     # include attesi) vivono in test_codemap_local.py — non nel file pubblico.
+
+
+class TestGovernanceDrift(unittest.TestCase):
+    def test_repo_inesistente(self):
+        self.assertEqual(governance_drift("/path/che/non/esiste"), (None, None))
+
+    def test_threshold_positivo(self):
+        self.assertGreater(DRIFT_THRESHOLD, 0)
+
+    def test_su_questo_repo(self):
+        """Integrazione leggera: questo repo ha CLAUDE.md committato in git."""
+        here = os.path.dirname(os.path.abspath(__file__))
+        date, n = governance_drift(here)
+        if date is None:
+            self.skipTest("repo senza CLAUDE.md committato")
+        self.assertIsInstance(n, int)
+        self.assertGreaterEqual(n, 0)
 
 
 class TestHookScript(unittest.TestCase):
