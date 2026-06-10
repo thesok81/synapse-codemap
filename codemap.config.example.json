@@ -1,0 +1,9 @@
+{
+  "out": "/path/to/your/vault/codemap",
+  "projects_root": "/path/to/your/projects",
+  "repos": {
+    "my-saas": {"dir": "my-saas-repo", "py": ["backend"], "ts": ["frontend/src"]},
+    "my-site": {"dir": "my-site", "py": [], "ts": ["src", "components"]},
+    "my-cli":  {"path": "/absolute/path/elsewhere/my-cli", "py": ["."], "ts": []}
+  }
+}
