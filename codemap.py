@@ -41,11 +41,13 @@ def load_config(path=None):
 
 def apply_config(path=None):
     """Carica la config nei globals (chiamata a import e, se --config, in main)."""
-    global OUT, PROJECTS_ROOT, REPOS
+    global OUT, PROJECTS_ROOT, REPOS, MIRRORS
     cfg = load_config(path)
     OUT = cfg.get("out", "")
     PROJECTS_ROOT = cfg.get("projects_root", "")
     REPOS = cfg.get("repos", {})
+    # mirrors: {file_rel_a_questo_script: path_assoluto_copia} — es. copia pubblicata su GitHub
+    MIRRORS = cfg.get("mirrors", {})
     return cfg
 
 apply_config()
@@ -233,6 +235,24 @@ def install_hook(slug, uninstall=False):
 
 DRIFT_THRESHOLD = 30  # commit dopo l'ultimo touch di CLAUDE.md -> audit consigliato
 
+def mirror_drift(mirrors=None, base_dir=None):
+    """Confronta i file sorgente con i loro mirror (config 'mirrors').
+    Ritorna lista di (src, stato) per i non allineati: 'DIVERGE' | 'MIRROR MANCANTE'."""
+    import hashlib
+    mirrors = MIRRORS if mirrors is None else mirrors
+    base = base_dir or os.path.dirname(os.path.abspath(__file__))
+    def h(p):
+        try: return hashlib.md5(open(p, "rb").read()).hexdigest()
+        except OSError: return None
+    out = []
+    for src, dst in mirrors.items():
+        sp = src if os.path.isabs(src) else os.path.join(base, src)
+        hs, hd = h(sp), h(dst)
+        if hd is None: out.append((src, "MIRROR MANCANTE"))
+        elif hs != hd: out.append((src, "DIVERGE"))
+    return out
+
+
 def parse_known_namespaces(registry_text):
     """Estrae il set 'known:' dalla riga machine-readable del registry."""
     m = re.search(r"^known:\s*(.+)$", registry_text, re.M)
@@ -325,6 +345,15 @@ def check_fresh():
         print(f"     → registrali in meta/vault-namespaces.md (scopo, schema, consumer, known:)")
     else:
         print("\n  namespace vault: tutti dichiarati nel registry ✓")
+
+    # --- mirror drift (file interni vs copie pubblicate, es. GitHub) ---
+    if MIRRORS:
+        ms = mirror_drift()
+        if ms:
+            for src, st in ms:
+                print(f"\n  ⚠️ MIRROR {st}: {src} — risincronizza la copia pubblicata (cp + commit + push)")
+        else:
+            print("\n  mirror pubblici: allineati ✓")
 
     if stale:
         print(f"\n  ⚠️ STALE: {', '.join(stale)} — verifica .git/hooks/post-commit in quei repo")

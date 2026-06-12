@@ -6,7 +6,7 @@ import os
 import unittest
 from codemap import (mod_key_for, TS_EXPORT, skip_js, REPOS, load_config,
                      make_hook_script, HOOK_MARKER, governance_drift,
-                     DRIFT_THRESHOLD, parse_known_namespaces)
+                     DRIFT_THRESHOLD, parse_known_namespaces, mirror_drift)
 
 
 class TestModKey(unittest.TestCase):
@@ -72,6 +72,21 @@ class TestReposConfig(unittest.TestCase):
 
     # I test legati alla config specifica di QUESTA macchina (slug reali,
     # include attesi) vivono in test_codemap_local.py — non nel file pubblico.
+
+
+class TestMirrorDrift(unittest.TestCase):
+    def test_allineati_e_divergenti(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            a = os.path.join(d, "a.py"); b = os.path.join(d, "b.py"); c = os.path.join(d, "c.py")
+            open(a, "w").write("x = 1\n"); open(b, "w").write("x = 1\n"); open(c, "w").write("x = 2\n")
+            self.assertEqual(mirror_drift({a: b}, base_dir=d), [])                      # identici
+            self.assertEqual(mirror_drift({a: c}, base_dir=d), [(a, "DIVERGE")])        # diversi
+            self.assertEqual(mirror_drift({a: os.path.join(d, "no.py")}, base_dir=d),
+                             [(a, "MIRROR MANCANTE")])
+
+    def test_mirrors_vuoto(self):
+        self.assertEqual(mirror_drift({}, base_dir="."), [])
 
 
 class TestNamespaceRegistry(unittest.TestCase):
