@@ -6,7 +6,7 @@ import os
 import unittest
 from codemap import (mod_key_for, TS_EXPORT, skip_js, REPOS, load_config,
                      make_hook_script, HOOK_MARKER, governance_drift,
-                     DRIFT_THRESHOLD)
+                     DRIFT_THRESHOLD, parse_known_namespaces)
 
 
 class TestModKey(unittest.TestCase):
@@ -72,6 +72,19 @@ class TestReposConfig(unittest.TestCase):
 
     # I test legati alla config specifica di QUESTA macchina (slug reali,
     # include attesi) vivono in test_codemap_local.py — non nel file pubblico.
+
+
+class TestNamespaceRegistry(unittest.TestCase):
+    def test_parse_known(self):
+        txt = "# Registry\nbla\nknown: esperienza, codemap, progetti\n"
+        self.assertEqual(parse_known_namespaces(txt),
+                         {"esperienza", "codemap", "progetti"})
+
+    def test_senza_riga_known(self):
+        self.assertIsNone(parse_known_namespaces("# Registry senza riga macchina"))
+
+    def test_spazi_e_vuoti(self):
+        self.assertEqual(parse_known_namespaces("known: a , b,, c "), {"a", "b", "c"})
 
 
 class TestGovernanceDrift(unittest.TestCase):

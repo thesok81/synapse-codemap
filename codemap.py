@@ -233,6 +233,24 @@ def install_hook(slug, uninstall=False):
 
 DRIFT_THRESHOLD = 30  # commit dopo l'ultimo touch di CLAUDE.md -> audit consigliato
 
+def parse_known_namespaces(registry_text):
+    """Estrae il set 'known:' dalla riga machine-readable del registry."""
+    m = re.search(r"^known:\s*(.+)$", registry_text, re.M)
+    if not m: return None
+    return {t.strip() for t in m.group(1).split(",") if t.strip()}
+
+def vault_namespace_drift():
+    """Confronta le dir top-level del vault col registry meta/vault-namespaces.md.
+    Ritorna (nuove, registry_path) — nuove = dir non dichiarate. None se registry assente."""
+    vault_root = os.path.dirname(OUT)  # OUT = <vault>/codemap
+    reg = os.path.join(vault_root, "meta", "vault-namespaces.md")
+    if not os.path.isfile(reg): return None, reg
+    known = parse_known_namespaces(open(reg, encoding="utf-8", errors="replace").read())
+    if known is None: return None, reg
+    actual = {d for d in os.listdir(vault_root)
+              if os.path.isdir(os.path.join(vault_root, d)) and not d.startswith(".")}
+    return sorted(actual - known), reg
+
 def governance_drift(path, fname="CLAUDE.md"):
     """(data ultimo touch, n commit dopo) del file governance nel repo.
     (None, None) se file assente o mai committato."""
@@ -297,6 +315,16 @@ def check_fresh():
         tops = ", ".join(f"{s} ({n})" for s, n in sorted(drifted, key=lambda x: -x[1]))
         print(f"\n  ⚠️ governance drift: {tops}")
         print("     → audit con /claude-md-improver sul repo (proposta automatica = livello 2, non attivo)")
+
+    # --- namespace drift vault (livello 1: solo detection) ---
+    new_ns, reg = vault_namespace_drift()
+    if new_ns is None:
+        print(f"\n  (namespace check saltato — registry assente: {reg})")
+    elif new_ns:
+        print(f"\n  ⚠️ NAMESPACE NON DICHIARATI nel vault: {', '.join(new_ns)}")
+        print(f"     → registrali in meta/vault-namespaces.md (scopo, schema, consumer, known:)")
+    else:
+        print("\n  namespace vault: tutti dichiarati nel registry ✓")
 
     if stale:
         print(f"\n  ⚠️ STALE: {', '.join(stale)} — verifica .git/hooks/post-commit in quei repo")
