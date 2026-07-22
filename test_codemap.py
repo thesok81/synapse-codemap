@@ -6,7 +6,102 @@ import os
 import unittest
 from codemap import (mod_key_for, TS_EXPORT, skip_js, REPOS, load_config,
                      make_hook_script, HOOK_MARKER, governance_drift,
-                     DRIFT_THRESHOLD, parse_known_namespaces, mirror_drift)
+                     DRIFT_THRESHOLD, parse_known_namespaces, mirror_drift,
+                     scan_repo)
+
+
+class TestSymbolIndexScan(unittest.TestCase):
+    """Indice simbolo→file: scan_repo traccia (nome, kind, file, riga) per simbolo."""
+
+    def test_python_simboli_con_riga(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            api = os.path.join(d, "api"); os.makedirs(api)
+            open(os.path.join(api, "router.py"), "w", encoding="utf-8").write(
+                "import os\n"                # riga 1
+                "\n"
+                "def top():\n"               # riga 3
+                "    pass\n"
+                "\n"
+                "class Handler:\n"           # riga 6
+                "    def metodo(self):\n"    # NON top-level: escluso
+                "        pass\n"
+                "\n"
+                "async def stream():\n"      # riga 10
+                "    pass\n")
+            mods = scan_repo(d, ["."], [])
+            syms = {s["n"]: s for s in mods["api"]["symbols"]}
+            self.assertEqual(syms["top"], {"n": "top", "k": "func",
+                                           "f": "api/router.py", "l": 3})
+            self.assertEqual(syms["Handler"]["k"], "class")
+            self.assertEqual(syms["Handler"]["l"], 6)
+            self.assertEqual(syms["stream"]["l"], 10)
+            self.assertNotIn("metodo", syms)  # solo top-level, come i set esistenti
+
+    def test_ts_tsx_simboli_con_riga_e_kind(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            ui = os.path.join(d, "ui"); os.makedirs(ui)
+            open(os.path.join(ui, "widget.tsx"), "w", encoding="utf-8").write(
+                "import React from 'react'\n"        # riga 1
+                "export const helper = () => 1\n"    # riga 2 → func (const cade in func)
+                "\n"
+                "export interface Props {}\n"        # riga 4 → type
+                "export class Store {}\n"            # riga 5 → class
+                "export default function Widget() {}\n")  # riga 6 → component (maiuscola+tsx)
+            mods = scan_repo(d, [], ["."])
+            syms = {s["n"]: s for s in mods["ui"]["symbols"]}
+            self.assertEqual(syms["helper"], {"n": "helper", "k": "func",
+                                              "f": "ui/widget.tsx", "l": 2})
+            self.assertEqual(syms["Props"]["k"], "type")
+            self.assertEqual(syms["Props"]["l"], 4)
+            self.assertEqual(syms["Store"]["k"], "class")
+            self.assertEqual(syms["Widget"], {"n": "Widget", "k": "component",
+                                              "f": "ui/widget.tsx", "l": 6})
+
+    def test_write_symbol_index_json_per_repo(self):
+        import tempfile, json
+        from codemap import write_symbol_index, new_mod
+        mods = {"api": new_mod(), "db": new_mod()}
+        mods["api"]["files"].append("router.py")
+        mods["api"]["symbols"].append({"n": "top", "k": "func", "f": "api/router.py", "l": 3})
+        mods["api"]["deps"] = {"db", "external"}   # 'external' non è un modulo del repo
+        mods["db"]["files"].append("schema.py")
+        mods["db"]["symbols"].append({"n": "Schema", "k": "class", "f": "db/schema.py", "l": 1})
+        with tempfile.TemporaryDirectory() as d:
+            write_symbol_index(mods, "demo", out_dir=d)
+            p = os.path.join(d, "_symbol-index-demo.json")
+            idx = json.load(open(p, encoding="utf-8"))
+            self.assertEqual(idx["repo"], "demo")
+            self.assertIn("generated", idx)
+            self.assertEqual(idx["module_deps"], {"api": ["db"]})  # filtrate ai moduli noti
+            by_name = {s["n"]: s for s in idx["symbols"]}
+            self.assertEqual(by_name["top"]["m"], "api")           # modulo aggiunto in scrittura
+            self.assertEqual(by_name["Schema"]["m"], "db")
+            write_symbol_index(mods, "demo", out_dir=d)            # rigenerazione: overwrite
+            idx2 = json.load(open(p, encoding="utf-8"))
+            self.assertEqual(len(idx2["symbols"]), 2)              # niente duplicati
+
+    def test_run_repo_scrive_anche_indice(self):
+        import tempfile, json
+        import codemap as cm
+        with tempfile.TemporaryDirectory() as d:
+            repo = os.path.join(d, "demo"); os.makedirs(os.path.join(repo, "api"))
+            open(os.path.join(repo, "api", "x.py"), "w", encoding="utf-8").write(
+                "def f():\n    pass\n")
+            out = os.path.join(d, "out")
+            cfgp = os.path.join(d, "cfg.json")
+            json.dump({"out": out, "projects_root": d,
+                       "repos": {"demo": {"dir": "demo", "py": ["."], "ts": []}}},
+                      open(cfgp, "w", encoding="utf-8"))
+            old = (cm.OUT, cm.PROJECTS_ROOT, cm.REPOS, cm.MIRRORS)
+            try:
+                cm.apply_config(cfgp)
+                cm.run_repo("demo", quiet=True)
+                self.assertTrue(os.path.isfile(
+                    os.path.join(out, "_symbol-index-demo.json")))
+            finally:
+                cm.OUT, cm.PROJECTS_ROOT, cm.REPOS, cm.MIRRORS = old
 
 
 class TestModKey(unittest.TestCase):

@@ -83,7 +83,8 @@ def skip_js(filename, size):
 
 def new_mod():
     return {"files": [], "classes": set(), "funcs": set(),
-            "components": set(), "types": set(), "deps": set(), "lang": set()}
+            "components": set(), "types": set(), "deps": set(), "lang": set(),
+            "symbols": []}  # [{n,k,f,l}] per l'indice simbolo→file (_symbol-index-*.json)
 
 
 def scan_repo(repo_path, include_py, include_ts):
@@ -105,9 +106,12 @@ def scan_repo(repo_path, include_py, include_ts):
                 except Exception: continue
                 m["files"].append(os.path.basename(rel)); m["lang"].add("py")
                 for node in tree.body:
-                    if isinstance(node, ast.ClassDef): m["classes"].add(node.name)
+                    if isinstance(node, ast.ClassDef):
+                        m["classes"].add(node.name)
+                        m["symbols"].append({"n": node.name, "k": "class", "f": rel, "l": node.lineno})
                     elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                         m["funcs"].add(node.name)
+                        m["symbols"].append({"n": node.name, "k": "func", "f": rel, "l": node.lineno})
                 for node in ast.walk(tree):
                     if isinstance(node, ast.ImportFrom) and node.module:
                         parts = node.module.split(".")
@@ -132,12 +136,15 @@ def scan_repo(repo_path, include_py, include_ts):
                 except Exception: continue
                 ext = fn.rsplit(".", 1)[-1]
                 m["files"].append(os.path.basename(rel)); m["lang"].add(ext)
-                for kind, name in TS_EXPORT.findall(txt):
-                    if kind == "class": m["classes"].add(name)
-                    elif kind in ("interface", "type"): m["types"].add(name)
+                for match in TS_EXPORT.finditer(txt):
+                    kind, name = match.group(1), match.group(2)
+                    line = txt.count("\n", 0, match.start()) + 1
+                    if kind == "class": k = "class"; m["classes"].add(name)
+                    elif kind in ("interface", "type"): k = "type"; m["types"].add(name)
                     elif name[:1].isupper() and ext in ("tsx", "jsx"):
-                        m["components"].add(name)
-                    else: m["funcs"].add(name)
+                        k = "component"; m["components"].add(name)
+                    else: k = "func"; m["funcs"].add(name)
+                    m["symbols"].append({"n": name, "k": k, "f": rel, "l": line})
                 for imp in TS_IMPORT.findall(txt):
                     seg = [p for p in imp.replace("@/", "").split("/")
                            if p and p not in (".", "..")]
@@ -182,6 +189,31 @@ def write_notes(mods, repo_name, out_dir=None, clean=True, quiet=False):
     return written, removed
 
 
+def write_symbol_index(mods, repo_name, out_dir=None):
+    """Scrive _symbol-index-<repo>.json: simboli {n,k,m,f,l} + module_deps
+    (grafo moduli→moduli, filtrato come in write_notes). Un file PER REPO:
+    l'hook post-commit rigenera solo il proprio — zero race, zero merge.
+    Letto per-chiamata dal tool MCP codemap_find_symbol (synapse.py)."""
+    import datetime
+    if out_dir is None: out_dir = OUT
+    os.makedirs(out_dir, exist_ok=True)
+    known = set(mods.keys())
+    symbols, module_deps = [], {}
+    for mod_key, m in sorted(mods.items()):
+        if not m["files"]: continue
+        deps = sorted(d for d in m["deps"] if d in known and d != mod_key)
+        if deps: module_deps[mod_key] = deps
+        for s in m["symbols"]:
+            symbols.append({**s, "m": mod_key})
+    idx = {"repo": repo_name,
+           "generated": datetime.datetime.now().isoformat(timespec="seconds"),
+           "module_deps": module_deps, "symbols": symbols}
+    with open(os.path.join(out_dir, f"_symbol-index-{repo_name}.json"),
+              "w", encoding="utf-8") as f:
+        json.dump(idx, f, ensure_ascii=False)
+    return len(symbols)
+
+
 def repo_path_of(slug):
     cfg = REPOS[slug]
     if cfg.get("path"): return cfg["path"]          # path assoluto esplicito
@@ -195,7 +227,9 @@ def run_repo(slug, quiet=False):
         if not quiet: print(f"  [{slug}] SKIP — path non trovato: {path}")
         return 0, 0
     mods = scan_repo(path, cfg["py"], cfg["ts"])
-    return write_notes(mods, slug, quiet=quiet)
+    result = write_notes(mods, slug, quiet=quiet)
+    write_symbol_index(mods, slug)
+    return result
 
 
 # --- auto-regen: post-commit hook -------------------------------------------
